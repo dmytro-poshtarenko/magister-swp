@@ -1,13 +1,16 @@
 import express from 'express';
 import { ConnectionError } from 'sequelize';
 import swaggerUi from 'swagger-ui-express';
+import { authRouter } from './auth/auth.router.js';
 import { openApiSpec } from './docs/openapi.js';
+import { requestLogger } from './logging/request-logger.js';
 import { usersRouter } from './users/users.router.js';
 
-export function createApp({ users }) {
+export function createApp({ users, tokens, logger }) {
   const app = express();
 
   app.disable('x-powered-by');
+  app.use(requestLogger(logger));
   app.use(express.json());
 
   app.get('/', (req, res) => {
@@ -15,12 +18,13 @@ export function createApp({ users }) {
       name: 'magister-swp',
       description:
         'RESTful API сервер з CRUD-операціями над користувачами в PostgreSQL',
-      resources: { users: '/api/users' },
+      resources: { auth: '/api/auth', users: '/api/users' },
       documentation: '/docs',
     });
   });
 
-  app.use('/api/users', usersRouter(users));
+  app.use('/api/auth', authRouter({ users, tokens }));
+  app.use('/api/users', usersRouter({ users, tokens }));
 
   app.get('/openapi.json', (req, res) => res.json(openApiSpec));
   app.use(
@@ -29,6 +33,7 @@ export function createApp({ users }) {
     swaggerUi.setup(openApiSpec, {
       customSiteTitle: 'magister-swp API',
       customCss: '.swagger-ui .topbar { display: none }',
+      swaggerOptions: { persistAuthorization: true },
     }),
   );
 
@@ -43,11 +48,14 @@ export function createApp({ users }) {
       return res.status(400).json({ error: 'BadRequest', message });
     }
     if (err instanceof ConnectionError) {
-      console.error(`${err.name}: ${err.parent?.code ?? err.message}`);
+      req.log.error('База даних недоступна', {
+        event: 'db_unavailable',
+        error: err.parent?.code ?? err.message,
+      });
       const message = 'База даних тимчасово недоступна';
       return res.status(503).json({ error: 'ServiceUnavailable', message });
     }
-    console.error(err);
+    req.log.error(err.message, { event: 'unhandled_error', stack: err.stack });
     const message = 'Внутрішня помилка сервера';
     res.status(500).json({ error: 'InternalServerError', message });
   });

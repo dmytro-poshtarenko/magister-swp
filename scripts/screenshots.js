@@ -1,15 +1,15 @@
-// Empties the users table, runs the API as a separate process, drives
-// Swagger UI and Adminer in headless Chrome and saves the screenshots into
-// docs/screenshots/lab-02/. The server is restarted before the last Swagger
-// request, so that screenshot shows data read back from PostgreSQL.
+// Empties the users table, runs the API as a separate process, signs up and
+// logs in through Swagger UI, sends a series of requests with different
+// outcomes and photographs the logs in Grafana. Screenshots and the server's
+// console output go into docs/screenshots/lab-03/.
 // Every Swagger request is checked against the expected URL and status code,
 // so a screenshot never shows something other than what its file name says.
 // Usage: npm run db:up && npm run screenshots
-// (CHROME_PATH overrides the Chrome binary, ADMINER_PORT the Adminer port)
+// (CHROME_PATH overrides the Chrome binary, GRAFANA_PORT the Grafana port)
 
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { createMigrator } from '../src/db/migrator.js';
@@ -20,17 +20,20 @@ const CHROME =
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT = fileURLToPath(
-  new URL('../docs/screenshots/lab-02/', import.meta.url),
+  new URL('../docs/screenshots/lab-03/', import.meta.url),
 );
 const API = `http://localhost:${Number(process.env.PORT) || 3000}`;
-const ADMINER = `http://localhost:${Number(process.env.ADMINER_PORT) || 8081}`;
+const GRAFANA = `http://localhost:${Number(process.env.GRAFANA_PORT) || 3001}`;
+const LOGS = '{service="magister-swp"} | json';
 
 const sequelize = createSequelize();
 await createMigrator(sequelize).up();
 await sequelize.query('TRUNCATE users RESTART IDENTITY');
 await sequelize.close();
 
-let server = await startServer();
+const consoleOutput = [];
+const started = Date.now();
+const server = await startServer();
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
@@ -43,63 +46,99 @@ try {
   await page.emulateMediaFeatures([
     { name: 'prefers-color-scheme', value: 'light' },
   ]);
-  await page.setExtraHTTPHeaders({ 'Accept-Language': 'uk-UA,uk;q=0.9' });
 
   await openSwagger(page);
-  await execute(page, 'createUser', {
-    expect: ['/api/users', 201],
-    file: '03-post-create-user.png',
+  await execute(page, 'auth-register', {
+    expect: ['/api/auth/register', 201],
+    file: '01-register-201.png',
   });
-  for (const user of [
-    { name: 'Іван Петренко', email: 'ivan@example.com', age: 31 },
-    { name: 'Марія Бондар', email: 'maria@example.com', age: 27 },
-  ]) {
-    await fetch(`${API}/api/users`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(user),
-    });
-  }
-  await execute(page, 'updateUser', {
-    id: '1',
-    expect: ['/api/users/1', 200],
-    file: '04-patch-user.png',
+  await execute(page, 'auth-login', {
+    expect: ['/api/auth/login', 200],
+    file: '02-login-200.png',
   });
-  await execute(page, 'deleteUser', {
-    id: '2',
-    expect: ['/api/users/2', 204],
-    file: '05-delete-user.png',
-  });
-  await execute(page, 'createUser', {
-    body: { name: 'Олена Шевчук', email: 'OLENA@example.com' },
-    expect: ['/api/users', 409],
-    file: '06-post-duplicate-email-409.png',
+  await execute(page, 'users-listUsers', {
+    expect: ['/api/users', 401],
+    file: '03-get-users-without-token-401.png',
   });
 
-  await stopServer(server);
-  server = await startServer();
-  await openSwagger(page);
-  await execute(page, 'listUsers', {
+  const olena = await login('olena@example.com', 'olena-password-2026');
+  await authorize(page, olena);
+  await execute(page, 'users-listUsers', {
     expect: ['/api/users', 200],
-    file: '07-get-users-after-restart.png',
+    file: '04-get-users-with-token-200.png',
+  });
+  await execute(page, 'users-deleteUser', {
+    id: '1',
+    expect: ['/api/users/1', 403],
+    file: '05-delete-user-as-user-403.png',
   });
 
-  await adminerLogin(page);
-  await adminerShot(page, '&ns=public', '01-adminer-tables.png');
-  await adminerShot(
-    page,
-    '&ns=public&table=users',
-    '02-adminer-users-structure.png',
-  );
-  await adminerShot(
-    page,
-    '&ns=public&select=users&order%5B0%5D=id',
-    '08-adminer-users-data.png',
-  );
-  console.log(`Скриншоти збережено в ${OUT}`);
+  await generateTraffic();
+  // The Loki transport sends a batch once a second.
+  await sleep(2500);
+
+  // Only this run's requests, however many earlier runs Loki holds.
+  const range = { from: started - 20_000, to: Date.now() + 10_000 };
+  await grafanaExplore(page, range, '06-grafana-explore-logs.png');
+  await grafanaDashboard(page, range, '07-grafana-dashboard.png');
 } finally {
   await browser.close();
   await stopServer(server);
+  await writeFile(`${OUT}console.jsonl`, consoleOutput.join(''));
+}
+console.log(`Скриншоти і вивід консолі збережено в ${OUT}`);
+
+async function login(email, password) {
+  const response = await fetch(`${API}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  return (await response.json()).accessToken;
+}
+
+// Requests with different outcomes, in several rounds a few seconds apart,
+// so the logs and the dashboard have something to show besides the Swagger
+// requests.
+async function generateTraffic() {
+  const admin = await login(
+    process.env.ADMIN_EMAIL,
+    process.env.ADMIN_PASSWORD,
+  );
+  const call = (method, path, body, token = admin) =>
+    fetch(`${API}${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        ...(token && { authorization: `Bearer ${token}` }),
+      },
+      body: body && JSON.stringify(body),
+    });
+
+  await call('POST', '/api/users', {
+    name: 'Іван Петренко',
+    email: 'ivan@example.com',
+    age: 31,
+  });
+  await call('PATCH', '/api/users/3', { age: 32 });
+  await call('POST', '/api/users', { name: 'Іван', email: 'IVAN@example.com' });
+  await call('DELETE', '/api/users/3');
+  for (let round = 0; round < 4; round += 1) {
+    await sleep(6000);
+    await call('GET', '/api/users');
+    await call('GET', `/api/users/${round + 1}`);
+    await call('GET', '/api/users/42');
+    await call('POST', '/api/users', { name: 'І', email: 'not-an-email' });
+    await call('POST', '/api/auth/login', {
+      email: 'olena@example.com',
+      password: 'wrong-password',
+    });
+    await call('GET', '/api/users', undefined, 'not-a-token');
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function startServer() {
@@ -107,14 +146,13 @@ async function startServer() {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'inherit'],
   });
-  let output = '';
   await new Promise((resolve, reject) => {
     child.stdout.on('data', (chunk) => {
-      output += chunk;
-      if (output.includes('Сервер запущено')) resolve();
+      consoleOutput.push(chunk.toString());
+      if (consoleOutput.join('').includes('Сервер запущено')) resolve();
     });
     child.once('exit', () =>
-      reject(new Error(`Сервер не запустився:\n${output}`)),
+      reject(new Error(`Сервер не запустився:\n${consoleOutput.join('')}`)),
     );
   });
   return child;
@@ -137,8 +175,18 @@ async function openSwagger(page) {
   });
 }
 
-async function execute(page, operationId, { id, body, expect, file }) {
-  const block = `#operations-users-${operationId}`;
+async function authorize(page, token) {
+  await page.click('.auth-wrapper .authorize');
+  await page.waitForSelector('.modal-ux .auth-container input');
+  await page.type('.modal-ux .auth-container input', token);
+  await page.click('.modal-ux .auth-btn-wrapper .authorize');
+  await page.waitForSelector('.modal-ux .auth-btn-wrapper .btn-done');
+  await page.click('.modal-ux .auth-btn-wrapper .btn-done');
+  await page.waitForSelector('.modal-ux', { hidden: true });
+}
+
+async function execute(page, operation, { id, body, expect, file }) {
+  const block = `#operations-${operation}`;
   if (!(await page.$(`${block}.is-open`))) {
     await page.click(`${block} .opblock-summary-control`);
     await page.waitForSelector(`${block}.is-open`);
@@ -205,32 +253,57 @@ async function setReactValue(page, selector, value) {
   );
   // Swagger UI debounces parameter inputs; Execute must not run before the
   // new value reaches its state.
-  await new Promise((resolve) => setTimeout(resolve, 700));
+  await sleep(700);
 }
 
-function adminerUrl(query = '') {
+async function grafanaExplore(page, range, file) {
+  const panes = {
+    lab: {
+      datasource: 'loki',
+      queries: [
+        {
+          refId: 'A',
+          expr: LOGS,
+          queryType: 'range',
+          editorMode: 'code',
+          datasource: { type: 'loki', uid: 'loki' },
+        },
+      ],
+      range: { from: String(range.from), to: String(range.to) },
+    },
+  };
   const params = new URLSearchParams({
-    pgsql: 'db',
-    username: process.env.DB_USER,
-    db: process.env.DB_NAME,
+    schemaVersion: '1',
+    panes: JSON.stringify(panes),
+    orgId: '1',
+    theme: 'light',
   });
-  return `${ADMINER}/?${params}${query}`;
+  await page.setViewport({ width: 1400, height: 1300, deviceScaleFactor: 1.5 });
+  await page.goto(`${GRAFANA}/explore?${params}`, {
+    waitUntil: 'networkidle0',
+  });
+  await page.waitForFunction(
+    () => document.body.innerText.includes('GET /api/users'),
+    { timeout: 30_000 },
+  );
+  await page.screenshot({ path: `${OUT}${file}` });
 }
 
-async function adminerLogin(page) {
-  await page.goto(adminerUrl(), { waitUntil: 'networkidle0' });
-  await page.select('select[name="auth[driver]"]', 'pgsql');
-  await page.type('input[name="auth[password]"]', process.env.DB_PASSWORD);
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle0' }),
-    page.click('input[type="submit"]'),
-  ]);
-  if (await page.$('input[name="auth[password]"]')) {
-    throw new Error('Adminer: не вдалося увійти, перевірте DB_* у .env');
-  }
-}
-
-async function adminerShot(page, query, file) {
-  await page.goto(adminerUrl(query), { waitUntil: 'networkidle0' });
-  await (await page.$('#content')).screenshot({ path: `${OUT}${file}` });
+async function grafanaDashboard(page, range, file) {
+  const params = new URLSearchParams({
+    orgId: '1',
+    from: String(range.from),
+    to: String(range.to),
+    theme: 'light',
+  });
+  await page.setViewport({ width: 1400, height: 1000, deviceScaleFactor: 1.5 });
+  await page.goto(`${GRAFANA}/d/magister-swp/?${params}&kiosk`, {
+    waitUntil: 'networkidle0',
+  });
+  await page.waitForFunction(
+    () => document.body.innerText.includes('/api/users'),
+    { timeout: 30_000 },
+  );
+  await sleep(1500);
+  await page.screenshot({ path: `${OUT}${file}` });
 }

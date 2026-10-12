@@ -1,4 +1,4 @@
-import { UniqueConstraintError } from 'sequelize';
+import { UniqueConstraintError, col, fn, where } from 'sequelize';
 
 export class EmailTakenError extends Error {
   constructor(email) {
@@ -7,11 +7,12 @@ export class EmailTakenError extends Error {
   }
 }
 
-const toUser = ({ id, name, email, age, createdAt, updatedAt }) => ({
+const toUser = ({ id, name, email, age, role, createdAt, updatedAt }) => ({
   id,
   name,
   email,
   age,
+  role,
   createdAt,
   updatedAt,
 });
@@ -59,5 +60,14 @@ export class UsersService {
   async delete(id) {
     const count = await this.#User.destroy({ where: { id } });
     return count > 0;
+  }
+
+  async findCredentials(email) {
+    const user = await this.#User.findOne({
+      attributes: ['id', 'role', 'passwordHash'],
+      where: where(fn('lower', col('email')), email.toLowerCase()),
+    });
+    if (!user) return null;
+    return { id: user.id, role: user.role, passwordHash: user.passwordHash };
   }
 }

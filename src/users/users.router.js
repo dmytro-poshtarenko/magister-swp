@@ -1,4 +1,11 @@
 import { Router } from 'express';
+import {
+  authenticate,
+  forbidden,
+  requireAdmin,
+} from '../auth/auth.middleware.js';
+import { hashPassword } from '../auth/passwords.js';
+import { sendError } from '../http/errors.js';
 import { EmailTakenError } from './users.service.js';
 import { validateUser } from './users.validation.js';
 
@@ -11,11 +18,6 @@ function parseId(raw) {
   return id <= MAX_ID ? id : null;
 }
 
-function sendError(res, status, error, message, details) {
-  const body = details ? { error, message, details } : { error, message };
-  res.status(status).json(body);
-}
-
 function notFound(res, id) {
   sendError(res, 404, 'NotFound', `Користувача з id ${id} не знайдено`);
 }
@@ -25,8 +27,16 @@ function invalidUser(res, errors) {
   sendError(res, 400, 'ValidationError', message, errors);
 }
 
-export function usersRouter(users) {
+function requireSelfOrAdmin(req, res, next) {
+  if (req.user.role !== 'admin' && req.user.id !== req.userId)
+    return forbidden(res);
+  next();
+}
+
+export function usersRouter({ users, tokens }) {
   const router = Router();
+
+  router.use(authenticate(tokens));
 
   router.param('id', (req, res, next, raw) => {
     const id = parseId(raw);
@@ -48,14 +58,18 @@ export function usersRouter(users) {
     res.json(user);
   });
 
-  router.post('/', async (req, res) => {
-    const { value, errors } = validateUser(req.body);
+  router.post('/', requireAdmin, async (req, res) => {
+    const { value, errors } = validateUser(req.body, {
+      extra: { password: {}, role: {} },
+    });
     if (errors) return invalidUser(res, errors);
-    const user = await users.create(value);
+    const { password, ...profile } = value;
+    if (password) profile.passwordHash = await hashPassword(password);
+    const user = await users.create(profile);
     res.status(201).location(`${req.baseUrl}/${user.id}`).json(user);
   });
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', requireSelfOrAdmin, async (req, res) => {
     const { value, errors } = validateUser(req.body);
     if (errors) return invalidUser(res, errors);
     const user = await users.update(req.userId, value);
@@ -63,7 +77,7 @@ export function usersRouter(users) {
     res.json(user);
   });
 
-  router.patch('/:id', async (req, res) => {
+  router.patch('/:id', requireSelfOrAdmin, async (req, res) => {
     const { value, errors } = validateUser(req.body, { partial: true });
     if (errors) return invalidUser(res, errors);
     const user = await users.update(req.userId, value);
@@ -71,7 +85,7 @@ export function usersRouter(users) {
     res.json(user);
   });
 
-  router.delete('/:id', async (req, res) => {
+  router.delete('/:id', requireAdmin, async (req, res) => {
     if (!(await users.delete(req.userId))) return notFound(res, req.userId);
     res.status(204).end();
   });

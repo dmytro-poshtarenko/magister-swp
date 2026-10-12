@@ -15,6 +15,16 @@ const userResponse = (description) => ({
   },
 });
 
+const jsonBody = (schema, example) => ({
+  required: true,
+  content: {
+    'application/json': {
+      schema: { $ref: `#/components/schemas/${schema}` },
+      example,
+    },
+  },
+});
+
 const idParameter = {
   name: 'id',
   in: 'path',
@@ -23,6 +33,8 @@ const idParameter = {
   schema: { type: 'integer', minimum: 1, maximum: 2147483647 },
   example: 1,
 };
+
+const bearer = [{ bearerAuth: [] }];
 
 const notFound = errorResponse('Користувача не знайдено', {
   error: 'NotFound',
@@ -50,27 +62,109 @@ const conflict = errorResponse('Email уже використано', {
   message: 'Користувач з email olena@example.com уже існує',
 });
 
+const unauthorized = errorResponse('Немає токена або токен недійсний', {
+  error: 'Unauthorized',
+  message: 'Потрібен токен доступу',
+});
+
+const forbidden = errorResponse('Недостатньо прав', {
+  error: 'Forbidden',
+  message: 'Недостатньо прав для цієї дії',
+});
+
 const unavailable = errorResponse('База даних недоступна', {
   error: 'ServiceUnavailable',
   message: 'База даних тимчасово недоступна',
 });
 
+const profile = {
+  name: { type: 'string', minLength: 2, maxLength: 100 },
+  email: { type: 'string', format: 'email' },
+  age: { type: 'integer', minimum: 1, maximum: 150, nullable: true },
+};
+
+const password = { type: 'string', minLength: 8, maxLength: 128 };
+
 export const openApiSpec = {
   openapi: '3.0.3',
   info: {
     title: 'magister-swp API',
-    version: '2.0.0',
+    version: '3.0.0',
     description:
-      'RESTful API сервер з CRUD-операціями над ресурсом «користувач». Дані зберігаються в PostgreSQL (лабораторна робота № 2).',
+      'RESTful API сервер з CRUD-операціями над ресурсом «користувач». Дані зберігаються в PostgreSQL, доступ до /api/users потребує токена JWT, отриманого через /api/auth/login (лабораторна робота № 3).',
   },
   servers: [{ url: '/' }],
-  tags: [{ name: 'users', description: 'Користувачі' }],
+  tags: [
+    { name: 'auth', description: 'Реєстрація та вхід' },
+    { name: 'users', description: 'Користувачі' },
+  ],
   paths: {
+    '/api/auth/register': {
+      post: {
+        tags: ['auth'],
+        operationId: 'register',
+        summary: 'Зареєструватися з роллю user',
+        requestBody: jsonBody('RegisterInput', {
+          name: 'Олена Коваленко',
+          email: 'olena@example.com',
+          age: 23,
+          password: 'olena-password-2026',
+        }),
+        responses: {
+          201: userResponse('Користувача зареєстровано'),
+          400: invalid,
+          409: conflict,
+          503: unavailable,
+        },
+      },
+    },
+    '/api/auth/login': {
+      post: {
+        tags: ['auth'],
+        operationId: 'login',
+        summary: 'Увійти й отримати токен доступу',
+        requestBody: jsonBody('LoginInput', {
+          email: 'olena@example.com',
+          password: 'olena-password-2026',
+        }),
+        responses: {
+          200: {
+            description: 'Токен доступу',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/Token' },
+              },
+            },
+          },
+          400: invalid,
+          401: errorResponse('Невірний email або пароль', {
+            error: 'Unauthorized',
+            message: 'Невірний email або пароль',
+          }),
+          503: unavailable,
+        },
+      },
+    },
+    '/api/auth/me': {
+      get: {
+        tags: ['auth'],
+        operationId: 'me',
+        summary: 'Отримати власний профіль',
+        security: bearer,
+        responses: {
+          200: userResponse('Профіль користувача, якому належить токен'),
+          401: unauthorized,
+          404: notFound,
+          503: unavailable,
+        },
+      },
+    },
     '/api/users': {
       get: {
         tags: ['users'],
         operationId: 'listUsers',
         summary: 'Отримати список користувачів',
+        security: bearer,
         responses: {
           200: {
             description: 'Список користувачів',
@@ -83,26 +177,22 @@ export const openApiSpec = {
               },
             },
           },
+          401: unauthorized,
           503: unavailable,
         },
       },
       post: {
         tags: ['users'],
         operationId: 'createUser',
-        summary: 'Створити користувача',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/UserInput' },
-              example: {
-                name: 'Олена Коваленко',
-                email: 'olena@example.com',
-                age: 23,
-              },
-            },
-          },
-        },
+        summary: 'Створити користувача (лише admin)',
+        security: bearer,
+        requestBody: jsonBody('UserCreate', {
+          name: 'Іван Петренко',
+          email: 'ivan@example.com',
+          age: 31,
+          password: 'ivan-password-2026',
+          role: 'user',
+        }),
         responses: {
           201: {
             ...userResponse('Користувача створено'),
@@ -114,6 +204,8 @@ export const openApiSpec = {
             },
           },
           400: invalid,
+          401: unauthorized,
+          403: forbidden,
           409: conflict,
           503: unavailable,
         },
@@ -125,9 +217,11 @@ export const openApiSpec = {
         tags: ['users'],
         operationId: 'getUser',
         summary: 'Отримати користувача за id',
+        security: bearer,
         responses: {
           200: userResponse('Користувач'),
           400: badId,
+          401: unauthorized,
           404: notFound,
           503: unavailable,
         },
@@ -135,23 +229,18 @@ export const openApiSpec = {
       put: {
         tags: ['users'],
         operationId: 'replaceUser',
-        summary: 'Повністю замінити дані користувача',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/UserInput' },
-              example: {
-                name: 'Олена Коваленко-Шевчук',
-                email: 'olena.shevchuk@example.com',
-                age: 24,
-              },
-            },
-          },
-        },
+        summary: 'Повністю замінити дані (власник або admin)',
+        security: bearer,
+        requestBody: jsonBody('UserInput', {
+          name: 'Олена Коваленко-Шевчук',
+          email: 'olena.shevchuk@example.com',
+          age: 24,
+        }),
         responses: {
           200: userResponse('Користувача оновлено'),
           400: invalid,
+          401: unauthorized,
+          403: forbidden,
           404: notFound,
           409: conflict,
           503: unavailable,
@@ -160,19 +249,14 @@ export const openApiSpec = {
       patch: {
         tags: ['users'],
         operationId: 'updateUser',
-        summary: 'Частково оновити дані користувача',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/UserPatch' },
-              example: { age: 25 },
-            },
-          },
-        },
+        summary: 'Частково оновити дані (власник або admin)',
+        security: bearer,
+        requestBody: jsonBody('UserPatch', { age: 25 }),
         responses: {
           200: userResponse('Користувача оновлено'),
           400: invalid,
+          401: unauthorized,
+          403: forbidden,
           404: notFound,
           409: conflict,
           503: unavailable,
@@ -181,10 +265,13 @@ export const openApiSpec = {
       delete: {
         tags: ['users'],
         operationId: 'deleteUser',
-        summary: 'Видалити користувача',
+        summary: 'Видалити користувача (лише admin)',
+        security: bearer,
         responses: {
           204: { description: 'Користувача видалено' },
           400: badId,
+          401: unauthorized,
+          403: forbidden,
           404: notFound,
           503: unavailable,
         },
@@ -192,6 +279,9 @@ export const openApiSpec = {
     },
   },
   components: {
+    securitySchemes: {
+      bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+    },
     schemas: {
       User: {
         type: 'object',
@@ -204,6 +294,7 @@ export const openApiSpec = {
             example: 'olena@example.com',
           },
           age: { type: 'integer', nullable: true, example: 23 },
+          role: { type: 'string', enum: ['user', 'admin'], example: 'user' },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
         },
@@ -211,22 +302,48 @@ export const openApiSpec = {
       UserInput: {
         type: 'object',
         required: ['name', 'email'],
+        properties: profile,
+        additionalProperties: false,
+      },
+      UserCreate: {
+        type: 'object',
+        required: ['name', 'email'],
         properties: {
-          name: { type: 'string', minLength: 2, maxLength: 100 },
-          email: { type: 'string', format: 'email' },
-          age: { type: 'integer', minimum: 1, maximum: 150, nullable: true },
+          ...profile,
+          password,
+          role: { type: 'string', enum: ['user', 'admin'], default: 'user' },
         },
         additionalProperties: false,
       },
       UserPatch: {
         type: 'object',
         minProperties: 1,
-        properties: {
-          name: { type: 'string', minLength: 2, maxLength: 100 },
-          email: { type: 'string', format: 'email' },
-          age: { type: 'integer', minimum: 1, maximum: 150, nullable: true },
-        },
+        properties: profile,
         additionalProperties: false,
+      },
+      RegisterInput: {
+        type: 'object',
+        required: ['name', 'email', 'password'],
+        properties: { ...profile, password },
+        additionalProperties: false,
+      },
+      LoginInput: {
+        type: 'object',
+        required: ['email', 'password'],
+        properties: { email: { type: 'string' }, password: { type: 'string' } },
+        additionalProperties: false,
+      },
+      Token: {
+        type: 'object',
+        properties: {
+          accessToken: { type: 'string' },
+          tokenType: { type: 'string', example: 'Bearer' },
+          expiresIn: {
+            type: 'integer',
+            description: 'Час дії токена, секунди',
+            example: 3600,
+          },
+        },
       },
       Error: {
         type: 'object',

@@ -7,27 +7,14 @@ import {
   describe,
   test,
 } from 'node:test';
-import { createApp } from '../src/app.js';
 import { createSequelize } from '../src/db/sequelize.js';
 import { defineUser } from '../src/users/user.model.js';
-import { UsersService } from '../src/users/users.service.js';
 import { connectTestDatabase } from './database.js';
+import { createTestLogger, startApp } from './helpers.js';
 
 let sequelize;
 let User;
-let server;
-let baseUrl;
-
-function start(model) {
-  const app = createApp({ users: new UsersService(model) });
-  return new Promise((resolve) => {
-    const instance = app.listen(0, () => resolve(instance));
-  });
-}
-
-function stop(instance) {
-  return new Promise((resolve) => instance.close(resolve));
-}
+let app;
 
 before(async () => {
   sequelize = await connectTestDatabase();
@@ -38,19 +25,13 @@ after(() => sequelize.close());
 
 beforeEach(async () => {
   await sequelize.query('TRUNCATE users RESTART IDENTITY');
-  server = await start(User);
-  baseUrl = `http://127.0.0.1:${server.address().port}`;
+  app = await startApp(User);
 });
 
-afterEach(() => stop(server));
+afterEach(() => app.stop());
 
-function request(method, path, body) {
-  const options = { method, headers: {} };
-  if (body !== undefined) {
-    options.headers['content-type'] = 'application/json';
-    options.body = typeof body === 'string' ? body : JSON.stringify(body);
-  }
-  return fetch(`${baseUrl}${path}`, options);
+function request(...args) {
+  return app.request(...args);
 }
 
 async function createUser(
@@ -91,14 +72,14 @@ describe('POST /api/users', () => {
       name: 'О',
       email: 'not-an-email',
       age: 0,
-      role: 'admin',
+      nickname: 'olena',
     });
     assert.equal(response.status, 400);
     const body = await response.json();
     assert.equal(body.error, 'ValidationError');
     assert.deepEqual(
       body.details.map((d) => d.field),
-      ['name', 'email', 'age', 'role'],
+      ['name', 'email', 'age', 'nickname'],
     );
   });
 
@@ -284,18 +265,17 @@ describe('DELETE /api/users/:id', () => {
 describe('PostgreSQL storage', () => {
   test('keeps users after the application restarts', async () => {
     const created = await createUser();
-    await stop(server);
+    await app.stop();
 
     const reconnected = await connectTestDatabase();
-    server = await start(defineUser(reconnected));
-    baseUrl = `http://127.0.0.1:${server.address().port}`;
+    app = await startApp(defineUser(reconnected));
     try {
       const users = await (await request('GET', '/api/users')).json();
       assert.deepEqual(users, [created]);
     } finally {
-      await stop(server);
+      await app.stop();
       await reconnected.close();
-      server = await start(User);
+      app = await startApp(User);
     }
   });
 
@@ -320,18 +300,18 @@ describe('PostgreSQL storage', () => {
     );
   });
 
-  test('answers 503 when the database is unreachable', async (t) => {
-    const logged = t.mock.method(console, 'error', () => {});
+  test('answers 503 when the database is unreachable', async () => {
+    const { logger, entries } = createTestLogger();
     const offline = createSequelize({ port: 1 });
-    const instance = await start(defineUser(offline));
+    const unreachable = await startApp(defineUser(offline), { logger });
     try {
-      const { port } = instance.address();
-      const response = await fetch(`http://127.0.0.1:${port}/api/users`);
+      const response = await unreachable.request('GET', '/api/users');
       assert.equal(response.status, 503);
       assert.equal((await response.json()).error, 'ServiceUnavailable');
-      assert.equal(logged.mock.callCount(), 1);
+      const logged = entries.find((e) => e.event === 'db_unavailable');
+      assert.equal(logged?.level, 'error');
     } finally {
-      await stop(instance);
+      await unreachable.stop();
       await offline.close();
     }
   });
@@ -346,9 +326,17 @@ describe('service routes', () => {
   test('serves the OpenAPI document', async () => {
     const spec = await (await request('GET', '/openapi.json')).json();
     assert.deepEqual(Object.keys(spec.paths), [
+      '/api/auth/register',
+      '/api/auth/login',
+      '/api/auth/me',
       '/api/users',
       '/api/users/{id}',
     ]);
+    assert.deepEqual(spec.components.securitySchemes.bearerAuth, {
+      type: 'http',
+      scheme: 'bearer',
+      bearerFormat: 'JWT',
+    });
   });
 
   test('returns JSON 404 for an unknown route', async () => {
