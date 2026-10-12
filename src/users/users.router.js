@@ -7,11 +7,17 @@ function parseId(raw) {
 }
 
 function sendError(res, status, error, message, details) {
-  res.status(status).json(details ? { error, message, details } : { error, message });
+  const body = details ? { error, message, details } : { error, message };
+  res.status(status).json(body);
 }
 
 function notFound(res, id) {
   sendError(res, 404, 'NotFound', `Користувача з id ${id} не знайдено`);
+}
+
+function invalidUser(res, errors) {
+  const message = 'Некоректні дані користувача';
+  sendError(res, 400, 'ValidationError', message, errors);
 }
 
 export function usersRouter(store) {
@@ -19,7 +25,10 @@ export function usersRouter(store) {
 
   router.param('id', (req, res, next, raw) => {
     const id = parseId(raw);
-    if (id === null) return sendError(res, 400, 'BadRequest', 'id має бути додатним цілим числом');
+    if (id === null) {
+      const message = 'id має бути додатним цілим числом';
+      return sendError(res, 400, 'BadRequest', message);
+    }
     req.userId = id;
     next();
   });
@@ -36,14 +45,14 @@ export function usersRouter(store) {
 
   router.post('/', (req, res) => {
     const { value, errors } = validateUser(req.body);
-    if (errors) return sendError(res, 400, 'ValidationError', 'Некоректні дані користувача', errors);
+    if (errors) return invalidUser(res, errors);
     const user = store.create(value);
     res.status(201).location(`${req.baseUrl}/${user.id}`).json(user);
   });
 
   router.put('/:id', (req, res) => {
     const { value, errors } = validateUser(req.body);
-    if (errors) return sendError(res, 400, 'ValidationError', 'Некоректні дані користувача', errors);
+    if (errors) return invalidUser(res, errors);
     const user = store.update(req.userId, value);
     if (!user) return notFound(res, req.userId);
     res.json(user);
@@ -51,7 +60,7 @@ export function usersRouter(store) {
 
   router.patch('/:id', (req, res) => {
     const { value, errors } = validateUser(req.body, { partial: true });
-    if (errors) return sendError(res, 400, 'ValidationError', 'Некоректні дані користувача', errors);
+    if (errors) return invalidUser(res, errors);
     const user = store.update(req.userId, value);
     if (!user) return notFound(res, req.userId);
     res.json(user);
@@ -63,7 +72,8 @@ export function usersRouter(store) {
   });
 
   router.use((err, req, res, next) => {
-    if (err instanceof EmailTakenError) return sendError(res, 409, 'Conflict', err.message);
+    if (err instanceof EmailTakenError)
+      return sendError(res, 409, 'Conflict', err.message);
     next(err);
   });
 

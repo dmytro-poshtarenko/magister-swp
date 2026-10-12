@@ -20,7 +20,14 @@ export class UsersStore {
   create({ name, email, age = null }) {
     this.#assertEmailFree(email);
     const now = new Date().toISOString();
-    const user = { id: this.#nextId++, name, email, age, createdAt: now, updatedAt: now };
+    const user = {
+      id: this.#nextId++,
+      name,
+      email,
+      age,
+      createdAt: now,
+      updatedAt: now,
+    };
     this.#users.set(user.id, user);
     return user;
   }
@@ -29,7 +36,13 @@ export class UsersStore {
     const user = this.#users.get(id);
     if (!user) return null;
     if (changes.email !== undefined) this.#assertEmailFree(changes.email, id);
-    const updated = { ...user, ...changes, id, createdAt: user.createdAt, updatedAt: new Date().toISOString() };
+    const updated = {
+      ...user,
+      ...changes,
+      id,
+      createdAt: user.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
     this.#users.set(id, updated);
     return updated;
   }
@@ -41,7 +54,8 @@ export class UsersStore {
   #assertEmailFree(email, ownId = null) {
     const wanted = email.toLowerCase();
     for (const user of this.#users.values()) {
-      if (user.id !== ownId && user.email.toLowerCase() === wanted) throw new EmailTakenError(email);
+      if (user.id !== ownId && user.email.toLowerCase() === wanted)
+        throw new EmailTakenError(email);
     }
   }
 }

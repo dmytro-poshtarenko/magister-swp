@@ -32,15 +32,18 @@ export function createApp({ store = new UsersStore() } = {}) {
   );
 
   app.use((req, res) => {
-    res.status(404).json({ error: 'NotFound', message: `Маршрут ${req.method} ${req.path} не існує` });
+    const message = `Маршрут ${req.method} ${req.path} не існує`;
+    res.status(404).json({ error: 'NotFound', message });
   });
 
   app.use((err, req, res, next) => {
     if (err.type === 'entity.parse.failed') {
-      return res.status(400).json({ error: 'BadRequest', message: 'Тіло запиту не є коректним JSON' });
+      const message = 'Тіло запиту не є коректним JSON';
+      return res.status(400).json({ error: 'BadRequest', message });
     }
     console.error(err);
-    res.status(500).json({ error: 'InternalServerError', message: 'Внутрішня помилка сервера' });
+    const message = 'Внутрішня помилка сервера';
+    res.status(500).json({ error: 'InternalServerError', message });
   });
 
   return app;

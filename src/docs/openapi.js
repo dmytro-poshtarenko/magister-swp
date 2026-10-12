@@ -1,11 +1,18 @@
 const errorResponse = (description, example) => ({
   description,
-  content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' }, example } },
+  content: {
+    'application/json': {
+      schema: { $ref: '#/components/schemas/Error' },
+      example,
+    },
+  },
 });
 
 const userResponse = (description) => ({
   description,
-  content: { 'application/json': { schema: { $ref: '#/components/schemas/User' } } },
+  content: {
+    'application/json': { schema: { $ref: '#/components/schemas/User' } },
+  },
 });
 
 const idParameter = {
@@ -30,7 +37,12 @@ const badId = errorResponse('Некоректний id', {
 const invalid = errorResponse('Некоректні дані', {
   error: 'ValidationError',
   message: 'Некоректні дані користувача',
-  details: [{ field: 'email', message: 'email має бути коректною адресою електронної пошти' }],
+  details: [
+    {
+      field: 'email',
+      message: 'email має бути коректною адресою електронної пошти',
+    },
+  ],
 });
 
 const conflict = errorResponse('Email уже використано', {
@@ -43,7 +55,8 @@ export const openApiSpec = {
   info: {
     title: 'magister-swp API',
     version: '1.0.0',
-    description: 'RESTful API сервер з CRUD-операціями над ресурсом «користувач» (лабораторна робота № 1).',
+    description:
+      'RESTful API сервер з CRUD-операціями над ресурсом «користувач» (лабораторна робота № 1).',
   },
   servers: [{ url: '/' }],
   tags: [{ name: 'users', description: 'Користувачі' }],
@@ -57,7 +70,12 @@ export const openApiSpec = {
           200: {
             description: 'Список користувачів',
             content: {
-              'application/json': { schema: { type: 'array', items: { $ref: '#/components/schemas/User' } } },
+              'application/json': {
+                schema: {
+                  type: 'array',
+                  items: { $ref: '#/components/schemas/User' },
+                },
+              },
             },
           },
         },
@@ -71,14 +89,23 @@ export const openApiSpec = {
           content: {
             'application/json': {
               schema: { $ref: '#/components/schemas/UserInput' },
-              example: { name: 'Олена Коваленко', email: 'olena@example.com', age: 23 },
+              example: {
+                name: 'Олена Коваленко',
+                email: 'olena@example.com',
+                age: 23,
+              },
             },
           },
         },
         responses: {
           201: {
             ...userResponse('Користувача створено'),
-            headers: { Location: { description: 'Адреса нового ресурсу', schema: { type: 'string' } } },
+            headers: {
+              Location: {
+                description: 'Адреса нового ресурсу',
+                schema: { type: 'string' },
+              },
+            },
           },
           400: invalid,
           409: conflict,
@@ -91,7 +118,11 @@ export const openApiSpec = {
         tags: ['users'],
         operationId: 'getUser',
         summary: 'Отримати користувача за id',
-        responses: { 200: userResponse('Користувач'), 400: badId, 404: notFound },
+        responses: {
+          200: userResponse('Користувач'),
+          400: badId,
+          404: notFound,
+        },
       },
       put: {
         tags: ['users'],
@@ -102,11 +133,20 @@ export const openApiSpec = {
           content: {
             'application/json': {
               schema: { $ref: '#/components/schemas/UserInput' },
-              example: { name: 'Олена Коваленко-Шевчук', email: 'olena.shevchuk@example.com', age: 24 },
+              example: {
+                name: 'Олена Коваленко-Шевчук',
+                email: 'olena.shevchuk@example.com',
+                age: 24,
+              },
             },
           },
         },
-        responses: { 200: userResponse('Користувача оновлено'), 400: invalid, 404: notFound, 409: conflict },
+        responses: {
+          200: userResponse('Користувача оновлено'),
+          400: invalid,
+          404: notFound,
+          409: conflict,
+        },
       },
       patch: {
         tags: ['users'],
@@ -121,13 +161,22 @@ export const openApiSpec = {
             },
           },
         },
-        responses: { 200: userResponse('Користувача оновлено'), 400: invalid, 404: notFound, 409: conflict },
+        responses: {
+          200: userResponse('Користувача оновлено'),
+          400: invalid,
+          404: notFound,
+          409: conflict,
+        },
       },
       delete: {
         tags: ['users'],
         operationId: 'deleteUser',
         summary: 'Видалити користувача',
-        responses: { 204: { description: 'Користувача видалено' }, 400: badId, 404: notFound },
+        responses: {
+          204: { description: 'Користувача видалено' },
+          400: badId,
+          404: notFound,
+        },
       },
     },
   },
@@ -138,7 +187,11 @@ export const openApiSpec = {
         properties: {
           id: { type: 'integer', example: 1 },
           name: { type: 'string', example: 'Олена Коваленко' },
-          email: { type: 'string', format: 'email', example: 'olena@example.com' },
+          email: {
+            type: 'string',
+            format: 'email',
+            example: 'olena@example.com',
+          },
           age: { type: 'integer', nullable: true, example: 23 },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
@@ -171,7 +224,13 @@ export const openApiSpec = {
           message: { type: 'string' },
           details: {
             type: 'array',
-            items: { type: 'object', properties: { field: { type: 'string' }, message: { type: 'string' } } },
+            items: {
+              type: 'object',
+              properties: {
+                field: { type: 'string' },
+                message: { type: 'string' },
+              },
+            },
           },
         },
       },

@@ -11,13 +11,16 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test",
-    "screenshots": "node scripts/screenshots.js"
+    "screenshots": "node scripts/screenshots.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "express": "^5.3.0",
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "prettier": "^3.9.10",
     "puppeteer-core": "^25.13.0"
   }
 }

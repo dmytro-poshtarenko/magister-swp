@@ -23,7 +23,9 @@ function request(method, path, body) {
   return fetch(`${baseUrl}${path}`, options);
 }
 
-async function createUser(body = { name: 'Олена Коваленко', email: 'olena@example.com', age: 23 }) {
+async function createUser(
+  body = { name: 'Олена Коваленко', email: 'olena@example.com', age: 23 },
+) {
   const response = await request('POST', '/api/users', body);
   assert.equal(response.status, 201);
   return response.json();
@@ -31,7 +33,11 @@ async function createUser(body = { name: 'Олена Коваленко', email:
 
 describe('POST /api/users', () => {
   test('creates a user and returns 201 with Location', async () => {
-    const response = await request('POST', '/api/users', { name: '  Олена Коваленко ', email: 'olena@example.com', age: 23 });
+    const response = await request('POST', '/api/users', {
+      name: '  Олена Коваленко ',
+      email: 'olena@example.com',
+      age: 23,
+    });
     assert.equal(response.status, 201);
     const user = await response.json();
     assert.equal(response.headers.get('location'), `/api/users/${user.id}`);
@@ -43,28 +49,45 @@ describe('POST /api/users', () => {
   });
 
   test('sets age to null when it is omitted', async () => {
-    const user = await createUser({ name: 'Іван Петренко', email: 'ivan@example.com' });
+    const user = await createUser({
+      name: 'Іван Петренко',
+      email: 'ivan@example.com',
+    });
     assert.equal(user.age, null);
   });
 
   test('rejects invalid data with 400 and lists every problem', async () => {
-    const response = await request('POST', '/api/users', { name: 'О', email: 'not-an-email', age: 0, role: 'admin' });
+    const response = await request('POST', '/api/users', {
+      name: 'О',
+      email: 'not-an-email',
+      age: 0,
+      role: 'admin',
+    });
     assert.equal(response.status, 400);
     const body = await response.json();
     assert.equal(body.error, 'ValidationError');
-    assert.deepEqual(body.details.map((d) => d.field), ['name', 'email', 'age', 'role']);
+    assert.deepEqual(
+      body.details.map((d) => d.field),
+      ['name', 'email', 'age', 'role'],
+    );
   });
 
   test('rejects missing required fields', async () => {
     const response = await request('POST', '/api/users', {});
     const body = await response.json();
     assert.equal(response.status, 400);
-    assert.deepEqual(body.details.map((d) => d.field), ['name', 'email']);
+    assert.deepEqual(
+      body.details.map((d) => d.field),
+      ['name', 'email'],
+    );
   });
 
   test('rejects a duplicate email regardless of case with 409', async () => {
     await createUser();
-    const response = await request('POST', '/api/users', { name: 'Інша Олена', email: 'OLENA@example.com' });
+    const response = await request('POST', '/api/users', {
+      name: 'Інша Олена',
+      email: 'OLENA@example.com',
+    });
     assert.equal(response.status, 409);
     assert.equal((await response.json()).error, 'Conflict');
   });
@@ -72,7 +95,10 @@ describe('POST /api/users', () => {
   test('rejects malformed JSON with 400', async () => {
     const response = await request('POST', '/api/users', '{"name": ');
     assert.equal(response.status, 400);
-    assert.equal((await response.json()).message, 'Тіло запиту не є коректним JSON');
+    assert.equal(
+      (await response.json()).message,
+      'Тіло запиту не є коректним JSON',
+    );
   });
 
   test('rejects a body that is not a JSON object', async () => {
@@ -92,7 +118,10 @@ describe('GET /api/users', () => {
     await createUser();
     await createUser({ name: 'Іван Петренко', email: 'ivan@example.com' });
     const users = await (await request('GET', '/api/users')).json();
-    assert.deepEqual(users.map((u) => u.email), ['olena@example.com', 'ivan@example.com']);
+    assert.deepEqual(
+      users.map((u) => u.email),
+      ['olena@example.com', 'ivan@example.com'],
+    );
   });
 });
 
@@ -107,7 +136,10 @@ describe('GET /api/users/:id', () => {
   test('returns 404 for an unknown id', async () => {
     const response = await request('GET', '/api/users/42');
     assert.equal(response.status, 404);
-    assert.equal((await response.json()).message, 'Користувача з id 42 не знайдено');
+    assert.equal(
+      (await response.json()).message,
+      'Користувача з id 42 не знайдено',
+    );
   });
 
   test('returns 400 for an id that is not a positive integer', async () => {
@@ -121,30 +153,47 @@ describe('GET /api/users/:id', () => {
 describe('PUT /api/users/:id', () => {
   test('replaces every field and resets an omitted age to null', async () => {
     const created = await createUser();
-    const response = await request('PUT', `/api/users/${created.id}`, { name: 'Олена Шевчук', email: 'shevchuk@example.com' });
+    const response = await request('PUT', `/api/users/${created.id}`, {
+      name: 'Олена Шевчук',
+      email: 'shevchuk@example.com',
+    });
     assert.equal(response.status, 200);
     const user = await response.json();
-    assert.deepEqual({ name: user.name, email: user.email, age: user.age }, { name: 'Олена Шевчук', email: 'shevchuk@example.com', age: null });
+    assert.deepEqual(
+      { name: user.name, email: user.email, age: user.age },
+      { name: 'Олена Шевчук', email: 'shevchuk@example.com', age: null },
+    );
     assert.equal(user.createdAt, created.createdAt);
   });
 
   test('requires the full representation', async () => {
     const created = await createUser();
-    const response = await request('PUT', `/api/users/${created.id}`, { age: 30 });
+    const response = await request('PUT', `/api/users/${created.id}`, {
+      age: 30,
+    });
     assert.equal(response.status, 400);
   });
 
   test('returns 404 for an unknown id', async () => {
-    const response = await request('PUT', '/api/users/42', { name: 'Олена', email: 'olena@example.com' });
+    const response = await request('PUT', '/api/users/42', {
+      name: 'Олена',
+      email: 'olena@example.com',
+    });
     assert.equal(response.status, 404);
   });
 
-  test('keeps the own email but rejects another user\'s email', async () => {
+  test("keeps the own email but rejects another user's email", async () => {
     const olena = await createUser();
     await createUser({ name: 'Іван Петренко', email: 'ivan@example.com' });
-    const own = await request('PUT', `/api/users/${olena.id}`, { name: 'Олена', email: 'olena@example.com' });
+    const own = await request('PUT', `/api/users/${olena.id}`, {
+      name: 'Олена',
+      email: 'olena@example.com',
+    });
     assert.equal(own.status, 200);
-    const taken = await request('PUT', `/api/users/${olena.id}`, { name: 'Олена', email: 'ivan@example.com' });
+    const taken = await request('PUT', `/api/users/${olena.id}`, {
+      name: 'Олена',
+      email: 'ivan@example.com',
+    });
     assert.equal(taken.status, 409);
   });
 });
@@ -152,10 +201,15 @@ describe('PUT /api/users/:id', () => {
 describe('PATCH /api/users/:id', () => {
   test('changes only the fields sent', async () => {
     const created = await createUser();
-    const response = await request('PATCH', `/api/users/${created.id}`, { age: 24 });
+    const response = await request('PATCH', `/api/users/${created.id}`, {
+      age: 24,
+    });
     assert.equal(response.status, 200);
     const user = await response.json();
-    assert.deepEqual({ name: user.name, email: user.email, age: user.age }, { name: created.name, email: created.email, age: 24 });
+    assert.deepEqual(
+      { name: user.name, email: user.email, age: user.age },
+      { name: created.name, email: created.email, age: 24 },
+    );
   });
 
   test('rejects an empty change', async () => {
@@ -176,7 +230,10 @@ describe('DELETE /api/users/:id', () => {
     const response = await request('DELETE', `/api/users/${created.id}`);
     assert.equal(response.status, 204);
     assert.equal(await response.text(), '');
-    assert.equal((await request('GET', `/api/users/${created.id}`)).status, 404);
+    assert.equal(
+      (await request('GET', `/api/users/${created.id}`)).status,
+      404,
+    );
   });
 
   test('returns 404 for an unknown id', async () => {
@@ -193,7 +250,10 @@ describe('service routes', () => {
 
   test('serves the OpenAPI document', async () => {
     const spec = await (await request('GET', '/openapi.json')).json();
-    assert.deepEqual(Object.keys(spec.paths), ['/api/users', '/api/users/{id}']);
+    assert.deepEqual(Object.keys(spec.paths), [
+      '/api/users',
+      '/api/users/{id}',
+    ]);
   });
 
   test('returns JSON 404 for an unknown route', async () => {
