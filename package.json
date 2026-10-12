@@ -1,0 +1,23 @@
+{
+  "name": "magister-swp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Лабораторні роботи з дисципліни «Серверне WEB-програмування»",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "screenshots": "node scripts/screenshots.js"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.13.0"
+  }
+}
