@@ -1,5 +1,7 @@
-// Starts the API on a free port, drives Swagger UI in headless Chrome and saves
-// one screenshot per executed request into docs/screenshots/.
+// Starts the API on port 3000 (or PORT), drives Swagger UI in headless Chrome
+// and saves one screenshot per executed request into docs/screenshots/.
+// Every request is checked against the expected URL and status code, so a
+// screenshot never shows something other than what its file name says.
 // Usage: npm run screenshots   (CHROME_PATH overrides the Chrome binary)
 
 import { mkdir } from 'node:fs/promises';
@@ -37,13 +39,17 @@ try {
     fullPage: true,
   });
 
-  // The documented response codes make every block very tall; the live response is what matters.
+  // The documented response codes make every block very tall; the live
+  // response is what matters.
   await page.addStyleTag({
     content: `.responses-table:not(.live-responses-table) { display: none !important; }
       textarea.body-param__text { height: 130px !important; min-height: 0 !important; }`,
   });
 
-  await execute(page, 'createUser', { file: '02-post-create-user.png' });
+  await execute(page, 'createUser', {
+    expect: ['/api/users', 201],
+    file: '02-post-create-user.png',
+  });
   await fetch(`${base}/api/users`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -53,21 +59,43 @@ try {
       age: 31,
     }),
   });
-  await execute(page, 'listUsers', { file: '03-get-users.png' });
-  await execute(page, 'getUser', { id: '1', file: '04-get-user-by-id.png' });
-  await execute(page, 'replaceUser', { id: '1', file: '05-put-user.png' });
-  await execute(page, 'updateUser', { id: '1', file: '06-patch-user.png' });
-  await execute(page, 'deleteUser', { id: '2', file: '07-delete-user.png' });
+  await execute(page, 'listUsers', {
+    expect: ['/api/users', 200],
+    file: '03-get-users.png',
+  });
+  await execute(page, 'getUser', {
+    id: '1',
+    expect: ['/api/users/1', 200],
+    file: '04-get-user-by-id.png',
+  });
+  await execute(page, 'replaceUser', {
+    id: '1',
+    expect: ['/api/users/1', 200],
+    file: '05-put-user.png',
+  });
+  await execute(page, 'updateUser', {
+    id: '1',
+    expect: ['/api/users/1', 200],
+    file: '06-patch-user.png',
+  });
+  await execute(page, 'deleteUser', {
+    id: '2',
+    expect: ['/api/users/2', 204],
+    file: '07-delete-user.png',
+  });
   await execute(page, 'getUser', {
     id: '2',
+    expect: ['/api/users/2', 404],
     file: '08-get-deleted-user-404.png',
   });
   await execute(page, 'createUser', {
     body: { name: 'О', email: 'olena-at-example.com', age: 0 },
+    expect: ['/api/users', 400],
     file: '09-post-validation-error-400.png',
   });
   await execute(page, 'createUser', {
     body: { name: 'Олена Шевчук', email: 'OLENA.SHEVCHUK@example.com' },
+    expect: ['/api/users', 409],
     file: '10-post-duplicate-email-409.png',
   });
   console.log(`Скриншоти збережено в ${OUT}`);
@@ -76,7 +104,7 @@ try {
   server.close();
 }
 
-async function execute(page, operationId, { id, body, file }) {
+async function execute(page, operationId, { id, body, expect, file }) {
   const block = `#operations-users-${operationId}`;
   if (!(await page.$(`${block}.is-open`))) {
     await page.click(`${block} .opblock-summary-control`);
@@ -113,6 +141,18 @@ async function execute(page, operationId, { id, body, file }) {
     block,
     previous,
   );
+  const [path, status] = expect;
+  const actual = await page.$eval(block, (el) => ({
+    url: el.querySelector('.request-url pre')?.textContent.trim(),
+    status: el
+      .querySelector('.live-responses-table tr.response .response-col_status')
+      ?.textContent.trim(),
+  }));
+  if (!actual.url?.endsWith(path) || actual.status !== String(status)) {
+    throw new Error(
+      `${file}: expected ${path} ${status}, got ${actual.url} ${actual.status}`,
+    );
+  }
   await (await page.$(block)).screenshot({ path: `${OUT}${file}` });
 }
 
@@ -130,4 +170,7 @@ async function setReactValue(page, selector, value) {
     },
     value,
   );
+  // Swagger UI debounces parameter inputs; Execute must not run before the
+  // new value reaches its state.
+  await new Promise((resolve) => setTimeout(resolve, 700));
 }
