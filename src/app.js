@@ -1,10 +1,10 @@
 import express from 'express';
+import { ConnectionError } from 'sequelize';
 import swaggerUi from 'swagger-ui-express';
 import { openApiSpec } from './docs/openapi.js';
 import { usersRouter } from './users/users.router.js';
-import { UsersStore } from './users/users.store.js';
 
-export function createApp({ store = new UsersStore() } = {}) {
+export function createApp({ users }) {
   const app = express();
 
   app.disable('x-powered-by');
@@ -13,13 +13,14 @@ export function createApp({ store = new UsersStore() } = {}) {
   app.get('/', (req, res) => {
     res.json({
       name: 'magister-swp',
-      description: 'RESTful API сервер з CRUD-операціями над користувачами',
+      description:
+        'RESTful API сервер з CRUD-операціями над користувачами в PostgreSQL',
       resources: { users: '/api/users' },
       documentation: '/docs',
     });
   });
 
-  app.use('/api/users', usersRouter(store));
+  app.use('/api/users', usersRouter(users));
 
   app.get('/openapi.json', (req, res) => res.json(openApiSpec));
   app.use(
@@ -40,6 +41,11 @@ export function createApp({ store = new UsersStore() } = {}) {
     if (err.type === 'entity.parse.failed') {
       const message = 'Тіло запиту не є коректним JSON';
       return res.status(400).json({ error: 'BadRequest', message });
+    }
+    if (err instanceof ConnectionError) {
+      console.error(`${err.name}: ${err.parent?.code ?? err.message}`);
+      const message = 'База даних тимчасово недоступна';
+      return res.status(503).json({ error: 'ServiceUnavailable', message });
     }
     console.error(err);
     const message = 'Внутрішня помилка сервера';

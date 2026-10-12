@@ -1,0 +1,31 @@
+name: magister-swp
+
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:?задайте DB_NAME у файлі .env}
+      POSTGRES_USER: ${DB_USER:?задайте DB_USER у файлі .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?задайте DB_PASSWORD у файлі .env}
+    ports:
+      - 127.0.0.1:${DB_PORT:-5442}:5432
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  adminer:
+    image: adminer:5
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports:
+      - 127.0.0.1:${ADMINER_PORT:-8081}:8080
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

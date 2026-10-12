@@ -1,18 +1,48 @@
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, describe, test } from 'node:test';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  test,
+} from 'node:test';
 import { createApp } from '../src/app.js';
+import { createSequelize } from '../src/db/sequelize.js';
+import { defineUser } from '../src/users/user.model.js';
+import { UsersService } from '../src/users/users.service.js';
+import { connectTestDatabase } from './database.js';
 
+let sequelize;
+let User;
 let server;
 let baseUrl;
 
-beforeEach(async () => {
-  await new Promise((resolve) => {
-    server = createApp().listen(0, resolve);
+function start(model) {
+  const app = createApp({ users: new UsersService(model) });
+  return new Promise((resolve) => {
+    const instance = app.listen(0, () => resolve(instance));
   });
+}
+
+function stop(instance) {
+  return new Promise((resolve) => instance.close(resolve));
+}
+
+before(async () => {
+  sequelize = await connectTestDatabase();
+  User = defineUser(sequelize);
+});
+
+after(() => sequelize.close());
+
+beforeEach(async () => {
+  await sequelize.query('TRUNCATE users RESTART IDENTITY');
+  server = await start(User);
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
-afterEach(() => new Promise((resolve) => server.close(resolve)));
+afterEach(() => stop(server));
 
 function request(method, path, body) {
   const options = { method, headers: {} };
@@ -148,6 +178,15 @@ describe('GET /api/users/:id', () => {
       assert.equal(response.status, 400, id);
     }
   });
+
+  test('returns 400 for an id beyond the integer column range', async () => {
+    const response = await request('GET', '/api/users/2147483648');
+    assert.equal(response.status, 400);
+    assert.equal(
+      (await response.json()).message,
+      'id має бути цілим числом від 1 до 2147483647',
+    );
+  });
 });
 
 describe('PUT /api/users/:id', () => {
@@ -239,6 +278,62 @@ describe('DELETE /api/users/:id', () => {
   test('returns 404 for an unknown id', async () => {
     const response = await request('DELETE', '/api/users/42');
     assert.equal(response.status, 404);
+  });
+});
+
+describe('PostgreSQL storage', () => {
+  test('keeps users after the application restarts', async () => {
+    const created = await createUser();
+    await stop(server);
+
+    const reconnected = await connectTestDatabase();
+    server = await start(defineUser(reconnected));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+    try {
+      const users = await (await request('GET', '/api/users')).json();
+      assert.deepEqual(users, [created]);
+    } finally {
+      await stop(server);
+      await reconnected.close();
+      server = await start(User);
+    }
+  });
+
+  test('lets only one of two concurrent requests take an email', async () => {
+    const responses = await Promise.all([
+      request('POST', '/api/users', {
+        name: 'Олена',
+        email: 'olena@example.com',
+      }),
+      request('POST', '/api/users', {
+        name: 'Олена',
+        email: 'OLENA@example.com',
+      }),
+    ]);
+    assert.deepEqual(responses.map((r) => r.status).sort(), [201, 409]);
+  });
+
+  test('rejects an age outside 1..150 in the database itself', async () => {
+    await assert.rejects(
+      User.create({ name: 'Тест', email: 'test@example.com', age: 200 }),
+      (err) => err.parent?.constraint === 'users_age_check',
+    );
+  });
+
+  test('answers 503 when the database is unreachable', async (t) => {
+    const logged = t.mock.method(console, 'error', () => {});
+    const offline = createSequelize({ port: 1 });
+    const instance = await start(defineUser(offline));
+    try {
+      const { port } = instance.address();
+      const response = await fetch(`http://127.0.0.1:${port}/api/users`);
+      assert.equal(response.status, 503);
+      assert.equal((await response.json()).error, 'ServiceUnavailable');
+      assert.equal(logged.mock.callCount(), 1);
+    } finally {
+      await stop(instance);
+      await offline.close();
+    }
   });
 });
 

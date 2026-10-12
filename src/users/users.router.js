@@ -1,9 +1,14 @@
 import { Router } from 'express';
-import { EmailTakenError } from './users.store.js';
+import { EmailTakenError } from './users.service.js';
 import { validateUser } from './users.validation.js';
 
+// The largest value of the PostgreSQL integer type used for users.id.
+const MAX_ID = 2_147_483_647;
+
 function parseId(raw) {
-  return /^[1-9]\d*$/.test(raw) ? Number(raw) : null;
+  if (!/^[1-9]\d*$/.test(raw)) return null;
+  const id = Number(raw);
+  return id <= MAX_ID ? id : null;
 }
 
 function sendError(res, status, error, message, details) {
@@ -20,54 +25,54 @@ function invalidUser(res, errors) {
   sendError(res, 400, 'ValidationError', message, errors);
 }
 
-export function usersRouter(store) {
+export function usersRouter(users) {
   const router = Router();
 
   router.param('id', (req, res, next, raw) => {
     const id = parseId(raw);
     if (id === null) {
-      const message = 'id має бути додатним цілим числом';
+      const message = `id має бути цілим числом від 1 до ${MAX_ID}`;
       return sendError(res, 400, 'BadRequest', message);
     }
     req.userId = id;
     next();
   });
 
-  router.get('/', (req, res) => {
-    res.json(store.list());
+  router.get('/', async (req, res) => {
+    res.json(await users.list());
   });
 
-  router.get('/:id', (req, res) => {
-    const user = store.get(req.userId);
+  router.get('/:id', async (req, res) => {
+    const user = await users.get(req.userId);
     if (!user) return notFound(res, req.userId);
     res.json(user);
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     const { value, errors } = validateUser(req.body);
     if (errors) return invalidUser(res, errors);
-    const user = store.create(value);
+    const user = await users.create(value);
     res.status(201).location(`${req.baseUrl}/${user.id}`).json(user);
   });
 
-  router.put('/:id', (req, res) => {
+  router.put('/:id', async (req, res) => {
     const { value, errors } = validateUser(req.body);
     if (errors) return invalidUser(res, errors);
-    const user = store.update(req.userId, value);
+    const user = await users.update(req.userId, value);
     if (!user) return notFound(res, req.userId);
     res.json(user);
   });
 
-  router.patch('/:id', (req, res) => {
+  router.patch('/:id', async (req, res) => {
     const { value, errors } = validateUser(req.body, { partial: true });
     if (errors) return invalidUser(res, errors);
-    const user = store.update(req.userId, value);
+    const user = await users.update(req.userId, value);
     if (!user) return notFound(res, req.userId);
     res.json(user);
   });
 
-  router.delete('/:id', (req, res) => {
-    if (!store.delete(req.userId)) return notFound(res, req.userId);
+  router.delete('/:id', async (req, res) => {
+    if (!(await users.delete(req.userId))) return notFound(res, req.userId);
     res.status(204).end();
   });
 

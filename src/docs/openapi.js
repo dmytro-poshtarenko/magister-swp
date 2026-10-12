@@ -20,7 +20,7 @@ const idParameter = {
   in: 'path',
   required: true,
   description: 'Ідентифікатор користувача',
-  schema: { type: 'integer', minimum: 1 },
+  schema: { type: 'integer', minimum: 1, maximum: 2147483647 },
   example: 1,
 };
 
@@ -31,7 +31,7 @@ const notFound = errorResponse('Користувача не знайдено', {
 
 const badId = errorResponse('Некоректний id', {
   error: 'BadRequest',
-  message: 'id має бути додатним цілим числом',
+  message: 'id має бути цілим числом від 1 до 2147483647',
 });
 
 const invalid = errorResponse('Некоректні дані', {
@@ -50,13 +50,18 @@ const conflict = errorResponse('Email уже використано', {
   message: 'Користувач з email olena@example.com уже існує',
 });
 
+const unavailable = errorResponse('База даних недоступна', {
+  error: 'ServiceUnavailable',
+  message: 'База даних тимчасово недоступна',
+});
+
 export const openApiSpec = {
   openapi: '3.0.3',
   info: {
     title: 'magister-swp API',
-    version: '1.0.0',
+    version: '2.0.0',
     description:
-      'RESTful API сервер з CRUD-операціями над ресурсом «користувач» (лабораторна робота № 1).',
+      'RESTful API сервер з CRUD-операціями над ресурсом «користувач». Дані зберігаються в PostgreSQL (лабораторна робота № 2).',
   },
   servers: [{ url: '/' }],
   tags: [{ name: 'users', description: 'Користувачі' }],
@@ -78,6 +83,7 @@ export const openApiSpec = {
               },
             },
           },
+          503: unavailable,
         },
       },
       post: {
@@ -109,6 +115,7 @@ export const openApiSpec = {
           },
           400: invalid,
           409: conflict,
+          503: unavailable,
         },
       },
     },
@@ -122,6 +129,7 @@ export const openApiSpec = {
           200: userResponse('Користувач'),
           400: badId,
           404: notFound,
+          503: unavailable,
         },
       },
       put: {
@@ -146,6 +154,7 @@ export const openApiSpec = {
           400: invalid,
           404: notFound,
           409: conflict,
+          503: unavailable,
         },
       },
       patch: {
@@ -166,6 +175,7 @@ export const openApiSpec = {
           400: invalid,
           404: notFound,
           409: conflict,
+          503: unavailable,
         },
       },
       delete: {
@@ -176,6 +186,7 @@ export const openApiSpec = {
           204: { description: 'Користувача видалено' },
           400: badId,
           404: notFound,
+          503: unavailable,
         },
       },
     },

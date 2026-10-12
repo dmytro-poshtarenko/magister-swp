@@ -1,25 +1,36 @@
-// Starts the API on port 3000 (or PORT), drives Swagger UI in headless Chrome
-// and saves one screenshot per executed request into docs/screenshots/.
-// Every request is checked against the expected URL and status code, so a
-// screenshot never shows something other than what its file name says.
-// Usage: npm run screenshots   (CHROME_PATH overrides the Chrome binary)
+// Empties the users table, runs the API as a separate process, drives
+// Swagger UI and Adminer in headless Chrome and saves the screenshots into
+// docs/screenshots/lab-02/. The server is restarted before the last Swagger
+// request, so that screenshot shows data read back from PostgreSQL.
+// Every Swagger request is checked against the expected URL and status code,
+// so a screenshot never shows something other than what its file name says.
+// Usage: npm run db:up && npm run screenshots
+// (CHROME_PATH overrides the Chrome binary, ADMINER_PORT the Adminer port)
 
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { createApp } from '../src/app.js';
+import { createMigrator } from '../src/db/migrator.js';
+import { createSequelize } from '../src/db/sequelize.js';
 
 const CHROME =
   process.env.CHROME_PATH ??
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const OUT = fileURLToPath(new URL('../docs/screenshots/', import.meta.url));
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const OUT = fileURLToPath(
+  new URL('../docs/screenshots/lab-02/', import.meta.url),
+);
+const API = `http://localhost:${Number(process.env.PORT) || 3000}`;
+const ADMINER = `http://localhost:${Number(process.env.ADMINER_PORT) || 8081}`;
 
-const server = await new Promise((resolve) => {
-  const instance = createApp().listen(Number(process.env.PORT) || 3000, () =>
-    resolve(instance),
-  );
-});
-const base = `http://localhost:${server.address().port}`;
+const sequelize = createSequelize();
+await createMigrator(sequelize).up();
+await sequelize.query('TRUNCATE users RESTART IDENTITY');
+await sequelize.close();
+
+let server = await startServer();
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
@@ -32,76 +43,98 @@ try {
   await page.emulateMediaFeatures([
     { name: 'prefers-color-scheme', value: 'light' },
   ]);
-  await page.goto(`${base}/docs`, { waitUntil: 'networkidle0' });
-  await page.waitForSelector('.opblock');
-  await page.screenshot({
-    path: `${OUT}01-swagger-overview.png`,
-    fullPage: true,
+  await page.setExtraHTTPHeaders({ 'Accept-Language': 'uk-UA,uk;q=0.9' });
+
+  await openSwagger(page);
+  await execute(page, 'createUser', {
+    expect: ['/api/users', 201],
+    file: '03-post-create-user.png',
+  });
+  for (const user of [
+    { name: 'Іван Петренко', email: 'ivan@example.com', age: 31 },
+    { name: 'Марія Бондар', email: 'maria@example.com', age: 27 },
+  ]) {
+    await fetch(`${API}/api/users`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(user),
+    });
+  }
+  await execute(page, 'updateUser', {
+    id: '1',
+    expect: ['/api/users/1', 200],
+    file: '04-patch-user.png',
+  });
+  await execute(page, 'deleteUser', {
+    id: '2',
+    expect: ['/api/users/2', 204],
+    file: '05-delete-user.png',
+  });
+  await execute(page, 'createUser', {
+    body: { name: 'Олена Шевчук', email: 'OLENA@example.com' },
+    expect: ['/api/users', 409],
+    file: '06-post-duplicate-email-409.png',
   });
 
+  await stopServer(server);
+  server = await startServer();
+  await openSwagger(page);
+  await execute(page, 'listUsers', {
+    expect: ['/api/users', 200],
+    file: '07-get-users-after-restart.png',
+  });
+
+  await adminerLogin(page);
+  await adminerShot(page, '&ns=public', '01-adminer-tables.png');
+  await adminerShot(
+    page,
+    '&ns=public&table=users',
+    '02-adminer-users-structure.png',
+  );
+  await adminerShot(
+    page,
+    '&ns=public&select=users&order%5B0%5D=id',
+    '08-adminer-users-data.png',
+  );
+  console.log(`Скриншоти збережено в ${OUT}`);
+} finally {
+  await browser.close();
+  await stopServer(server);
+}
+
+async function startServer() {
+  const child = spawn(process.execPath, ['src/server.js'], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  let output = '';
+  await new Promise((resolve, reject) => {
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+      if (output.includes('Сервер запущено')) resolve();
+    });
+    child.once('exit', () =>
+      reject(new Error(`Сервер не запустився:\n${output}`)),
+    );
+  });
+  return child;
+}
+
+async function stopServer(child) {
+  if (child.exitCode !== null) return;
+  child.kill('SIGTERM');
+  await once(child, 'exit');
+}
+
+async function openSwagger(page) {
+  await page.goto(`${API}/docs`, { waitUntil: 'networkidle0' });
+  await page.waitForSelector('.opblock');
   // The documented response codes make every block very tall; the live
   // response is what matters.
   await page.addStyleTag({
     content: `.responses-table:not(.live-responses-table) { display: none !important; }
       textarea.body-param__text { height: 130px !important; min-height: 0 !important; }`,
   });
-
-  await execute(page, 'createUser', {
-    expect: ['/api/users', 201],
-    file: '02-post-create-user.png',
-  });
-  await fetch(`${base}/api/users`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      name: 'Іван Петренко',
-      email: 'ivan@example.com',
-      age: 31,
-    }),
-  });
-  await execute(page, 'listUsers', {
-    expect: ['/api/users', 200],
-    file: '03-get-users.png',
-  });
-  await execute(page, 'getUser', {
-    id: '1',
-    expect: ['/api/users/1', 200],
-    file: '04-get-user-by-id.png',
-  });
-  await execute(page, 'replaceUser', {
-    id: '1',
-    expect: ['/api/users/1', 200],
-    file: '05-put-user.png',
-  });
-  await execute(page, 'updateUser', {
-    id: '1',
-    expect: ['/api/users/1', 200],
-    file: '06-patch-user.png',
-  });
-  await execute(page, 'deleteUser', {
-    id: '2',
-    expect: ['/api/users/2', 204],
-    file: '07-delete-user.png',
-  });
-  await execute(page, 'getUser', {
-    id: '2',
-    expect: ['/api/users/2', 404],
-    file: '08-get-deleted-user-404.png',
-  });
-  await execute(page, 'createUser', {
-    body: { name: 'О', email: 'olena-at-example.com', age: 0 },
-    expect: ['/api/users', 400],
-    file: '09-post-validation-error-400.png',
-  });
-  await execute(page, 'createUser', {
-    body: { name: 'Олена Шевчук', email: 'OLENA.SHEVCHUK@example.com' },
-    expect: ['/api/users', 409],
-    file: '10-post-duplicate-email-409.png',
-  });
-  console.log(`Скриншоти збережено в ${OUT}`);
-} finally {
-  await browser.close();
-  server.close();
 }
 
 async function execute(page, operationId, { id, body, expect, file }) {
@@ -173,4 +206,31 @@ async function setReactValue(page, selector, value) {
   // Swagger UI debounces parameter inputs; Execute must not run before the
   // new value reaches its state.
   await new Promise((resolve) => setTimeout(resolve, 700));
+}
+
+function adminerUrl(query = '') {
+  const params = new URLSearchParams({
+    pgsql: 'db',
+    username: process.env.DB_USER,
+    db: process.env.DB_NAME,
+  });
+  return `${ADMINER}/?${params}${query}`;
+}
+
+async function adminerLogin(page) {
+  await page.goto(adminerUrl(), { waitUntil: 'networkidle0' });
+  await page.select('select[name="auth[driver]"]', 'pgsql');
+  await page.type('input[name="auth[password]"]', process.env.DB_PASSWORD);
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'networkidle0' }),
+    page.click('input[type="submit"]'),
+  ]);
+  if (await page.$('input[name="auth[password]"]')) {
+    throw new Error('Adminer: не вдалося увійти, перевірте DB_* у .env');
+  }
+}
+
+async function adminerShot(page, query, file) {
+  await page.goto(adminerUrl(query), { waitUntil: 'networkidle0' });
+  await (await page.$('#content')).screenshot({ path: `${OUT}${file}` });
 }
